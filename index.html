@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Stone Dodger</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;900&display=swap" rel="stylesheet">
+    <style>
+        body {
+            margin: 0;
+            background-color: #020617;
+            color: #f8fafc;
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+            touch-action: none;
+        }
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+        }
+        .retro-glow {
+            text-shadow: 0 0 10px rgba(56, 189, 248, 0.8);
+        }
+        #ui-overlay {
+            pointer-events: none;
+        }
+        .btn-shadow {
+            box-shadow: 0 4px 0 #0369a1;
+        }
+        .btn-shadow:active {
+            transform: translateY(2px);
+            box-shadow: 0 2px 0 #0369a1;
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center h-screen">
+
+    <!-- UI 레이어 -->
+    <div id="ui-overlay" class="absolute inset-0 z-10 flex flex-col items-center justify-between py-10">
+        <div class="text-center">
+            <h1 class="text-xl font-black tracking-tighter opacity-30 uppercase">Stone Dodger</h1>
+            <div id="score-text" class="text-6xl font-black retro-glow">0</div>
+        </div>
+        
+        <!-- 게임 시작/종료 메시지 -->
+        <div id="message-screen" class="pointer-events-auto bg-slate-900/90 border-2 border-sky-500 p-8 rounded-2xl text-center hidden">
+            <h2 id="msg-title" class="text-3xl font-black mb-2 text-sky-400">READY?</h2>
+            <p id="msg-desc" class="text-slate-400 mb-6">마우스나 터치로 돌을 피하세요!</p>
+            <button id="start-btn" class="bg-sky-500 hover:bg-sky-400 text-white font-bold py-3 px-10 rounded-full btn-shadow transition-all uppercase tracking-widest">
+                Start Game
+            </button>
+        </div>
+        
+        <div class="text-xs text-slate-500 uppercase tracking-widest">Avoid the falling space debris</div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreText = document.getElementById('score-text');
+        const messageScreen = document.getElementById('message-screen');
+        const msgTitle = document.getElementById('msg-title');
+        const msgDesc = document.getElementById('msg-desc');
+        const startBtn = document.getElementById('start-btn');
+
+        let width, height;
+        let score = 0;
+        let isPlaying = false;
+        let animationId;
+        let lastTime = 0;
+        let shakeTime = 0;
+
+        const config = {
+            playerSize: 25,
+            stoneBaseSpeed: 3,
+            spawnRate: 800, // 밀리초
+            minSpawnRate: 200,
+            speedIncrement: 0.1,
+            particleCount: 15
+        };
+
+        let player = { x: 0, y: 0, targetX: 0, targetY: 0, color: '#38bdf8' };
+        let stones = [];
+        let particles = [];
+        let stars = [];
+
+        function resize() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+            
+            if (!isPlaying) {
+                player.x = width / 2;
+                player.y = height * 0.8;
+                player.targetX = player.x;
+                player.targetY = player.y;
+            }
+            
+            // 배경 별 초기화
+            stars = [];
+            for(let i = 0; i < 100; i++) {
+                stars.push({
+                    x: Math.random() * width,
+                    y: Math.random() * height,
+                    size: Math.random() * 2,
+                    speed: Math.random() * 0.5 + 0.1
+                });
+            }
+        }
+
+        function handleInput(e) {
+            const x = e.clientX || (e.touches && e.touches[0].clientX);
+            const y = e.clientY || (e.touches && e.touches[0].clientY);
+            if (x !== undefined) {
+                player.targetX = x;
+                player.targetY = y;
+            }
+        }
+
+        window.addEventListener('resize', resize);
+        window.addEventListener('mousemove', handleInput);
+        window.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            handleInput(e);
+        }, { passive: false });
+
+        function spawnStone() {
+            if (!isPlaying) return;
+            
+            const size = 20 + Math.random() * 40;
+            const speed = config.stoneBaseSpeed + (score / 10);
+            
+            stones.push({
+                x: Math.random() * width,
+                y: -size,
+                width: size,
+                height: size,
+                speed: speed,
+                rotation: 0,
+                rotSpeed: (Math.random() - 0.5) * 0.1,
+                color: '#94a3b8',
+                points: generateJaggedPoints(size)
+            });
+
+            // 난이도에 따른 생성 속도 조절
+            const nextSpawn = Math.max(config.minSpawnRate, config.spawnRate - (score * 5));
+            setTimeout(spawnStone, nextSpawn);
+        }
+
+        function generateJaggedPoints(size) {
+            const points = [];
+            const segments = 8;
+            for(let i = 0; i < segments; i++) {
+                const angle = (i / segments) * Math.PI * 2;
+                const dist = (size / 2) * (0.8 + Math.random() * 0.4);
+                points.push({
+                    x: Math.cos(angle) * dist,
+                    y: Math.sin(angle) * dist
+                });
+            }
+            return points;
+        }
+
+        function createExplosion(x, y, color) {
+            for(let i = 0; i < config.particleCount; i++) {
+                particles.push({
+                    x, y,
+                    vx: (Math.random() - 0.5) * 10,
+                    vy: (Math.random() - 0.5) * 10,
+                    size: Math.random() * 4 + 2,
+                    life: 1,
+                    color: color
+                });
+            }
+            shakeTime = 15;
+        }
+
+        function startGame() {
+            score = 0;
+            stones = [];
+            particles = [];
+            isPlaying = true;
+            messageScreen.classList.add('hidden');
+            scoreText.innerText = '0';
+            
+            player.x = width / 2;
+            player.y = height * 0.8;
+            
+            spawnStone();
+            lastTime = performance.now();
+            animate();
+        }
+
+        function gameOver() {
+            isPlaying = false;
+            cancelAnimationFrame(animationId);
+            createExplosion(player.x, player.y, '#ef4444');
+            
+            setTimeout(() => {
+                msgTitle.innerText = "CRASHED!";
+                msgDesc.innerText = `Final Score: ${score}`;
+                startBtn.innerText = "Try Again";
+                messageScreen.classList.remove('hidden');
+            }, 500);
+        }
+
+        startBtn.onclick = startGame;
+
+        function update(deltaTime) {
+            if (!isPlaying) return;
+
+            // 플레이어 부드러운 이동
+            player.x += (player.targetX - player.x) * 0.15;
+            player.y += (player.targetY - player.y) * 0.15;
+
+            // 돌 업데이트
+            for(let i = stones.length - 1; i >= 0; i--) {
+                const s = stones[i];
+                s.y += s.speed;
+                s.rotation += s.rotSpeed;
+
+                // 충돌 감지 (원형 근사)
+                const dx = player.x - s.x;
+                const dy = player.y - s.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance < (config.playerSize / 2 + s.width / 2) - 5) {
+                    gameOver();
+                }
+
+                // 화면 밖으로 나가면 삭제 및 점수 획득
+                if (s.y > height + s.height) {
+                    stones.splice(i, 1);
+                    score++;
+                    scoreText.innerText = score;
+                }
+            }
+
+            // 파티클 업데이트
+            for(let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= 0.02;
+                if (p.life <= 0) particles.splice(i, 1);
+            }
+
+            // 별 배경 업데이트
+            stars.forEach(star => {
+                star.y += star.speed;
+                if (star.y > height) star.y = 0;
+            });
+
+            if (shakeTime > 0) shakeTime--;
+        }
+
+        function draw() {
+            ctx.fillStyle = '#020617';
+            ctx.fillRect(0, 0, width, height);
+
+            ctx.save();
+            if (shakeTime > 0) {
+                ctx.translate((Math.random()-0.5)*10, (Math.random()-0.5)*10);
+            }
+
+            // 별 그리기
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+            stars.forEach(star => {
+                ctx.beginPath();
+                ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // 돌 그리기
+            stones.forEach(s => {
+                ctx.save();
+                ctx.translate(s.x, s.y);
+                ctx.rotate(s.rotation);
+                
+                ctx.beginPath();
+                ctx.moveTo(s.points[0].x, s.points[0].y);
+                for(let i = 1; i < s.points.length; i++) {
+                    ctx.lineTo(s.points[i].x, s.points[i].y);
+                }
+                ctx.closePath();
+                
+                ctx.fillStyle = '#1e293b';
+                ctx.strokeStyle = '#94a3b8';
+                ctx.lineWidth = 2;
+                ctx.fill();
+                ctx.stroke();
+                
+                // 디테일(크레이터 등)
+                ctx.fillStyle = 'rgba(0,0,0,0.2)';
+                ctx.beginPath();
+                ctx.arc(-s.width/4, -s.width/6, s.width/8, 0, Math.PI*2);
+                ctx.fill();
+                
+                ctx.restore();
+            });
+
+            // 파티클 그리기
+            particles.forEach(p => {
+                ctx.globalAlpha = p.life;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // 플레이어 그리기
+            if (isPlaying) {
+                ctx.save();
+                ctx.translate(player.x, player.y);
+                
+                // 외부 광원 효과
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = player.color;
+                
+                // 기체 바디
+                ctx.fillStyle = player.color;
+                ctx.beginPath();
+                ctx.moveTo(0, -config.playerSize);
+                ctx.lineTo(config.playerSize/1.5, config.playerSize/1.5);
+                ctx.lineTo(-config.playerSize/1.5, config.playerSize/1.5);
+                ctx.closePath();
+                ctx.fill();
+                
+                // 엔진 불꽃
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = '#fbbf24';
+                ctx.fillStyle = '#fbbf24';
+                ctx.beginPath();
+                ctx.moveTo(-5, config.playerSize/1.5);
+                ctx.lineTo(5, config.playerSize/1.5);
+                ctx.lineTo(0, config.playerSize/1.5 + (Math.random() * 15 + 5));
+                ctx.closePath();
+                ctx.fill();
+                
+                ctx.restore();
+            }
+
+            ctx.restore();
+        }
+
+        function animate(time) {
+            const deltaTime = time - lastTime;
+            lastTime = time;
+
+            update(deltaTime);
+            draw();
+
+            if (isPlaying || particles.length > 0) {
+                animationId = requestAnimationFrame(animate);
+            }
+        }
+
+        resize();
+        messageScreen.classList.remove('hidden');
+        draw(); // 초기 화면 그리기
+    </script>
+</body>
+</html>
